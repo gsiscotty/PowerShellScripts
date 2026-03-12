@@ -1,23 +1,14 @@
-# PowerShell artifacts
-*.ps1xml
-*.clixml
-*.log
-*.tmp
-*.bak
+# Ignore everything by default
+*
 
-# VS Code / Cursor
-.vscode/
-.idea/
+# Keep folders visible so allow rules can apply inside them
+!*/
 
-# Certificates and secrets
-*.pfx
-*.p12
-*.pem
-*.key
-*.pvk
-*.jks
-*.snk
+# Keep PowerShell source files
+!*.ps1
+!*.psm1
+!*.psd1
 
-# OS files
-.DS_Store
-Thumbs.db
+# Keep repo essentials
+!.gitignore
+!README.md
