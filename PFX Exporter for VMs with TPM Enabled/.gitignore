@@ -1,0 +1,23 @@
+# PowerShell artifacts
+*.ps1xml
+*.clixml
+*.log
+*.tmp
+*.bak
+
+# VS Code / Cursor
+.vscode/
+.idea/
+
+# Certificates and secrets
+*.pfx
+*.p12
+*.pem
+*.key
+*.pvk
+*.jks
+*.snk
+
+# OS files
+.DS_Store
+Thumbs.db
