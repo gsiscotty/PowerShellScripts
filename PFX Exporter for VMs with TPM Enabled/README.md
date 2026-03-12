@@ -8,6 +8,8 @@ PowerShell script to safely **import** or **export** PFX certificates with inter
 - Validates PFX password before import
 - Imports certificate into a selected certificate store
 - Exports a certificate with private key to a password-protected PFX
+- By default exports host-related VM certificates for the current host (`$env:COMPUTERNAME`)
+- Includes both VM **Encryption** and VM **Signing** certificates in default host export
 - Validates the exported PFX immediately after export
 
 ## File
@@ -40,6 +42,14 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
    - `1` to import PFX
    - `2` to export certificate to PFX
    - `Q` to exit
+
+## Which certificates should I export?
+
+- If you are on `GSISRVHYP05`, export certificates related to `GSISRVHYP05`.
+- For replication/move scenarios, export both:
+  - `Shielded VM Encryption Certificate`
+  - `Shielded VM Signing Certificate`
+- The script default filter (`H`) is designed for this: host-related VM certs (Encryption + Signing).
 
 ## If already cloned locally
 

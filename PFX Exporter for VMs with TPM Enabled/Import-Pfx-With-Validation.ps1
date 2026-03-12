@@ -147,20 +147,123 @@ function Invoke-PfxExport {
         throw "No certificates with private keys were found in $storeLocation."
     }
 
+    $localHost = $env:COMPUTERNAME
+    $escapedHost = [regex]::Escape($localHost)
+    $hostScopedCerts = @($availableCerts | Where-Object { $_.Subject -match $escapedHost })
+    $hostVmCerts = @($hostScopedCerts | Where-Object { $_.Subject -match 'Encryption Certificate|Signing Certificate' })
+
+    Write-Info "Host context: $localHost"
+    Write-Info "Default filter exports host-related VM certificates (Encryption + Signing)."
+
+    $filterChoice = Read-Host "Filter certificates: [H]ost VM certs (default), [E]ncryption, [S]igning, [A]ll"
+    $displayCerts = $availableCerts
+    switch -Regex ($filterChoice) {
+        '^\s*h\s*$' { $displayCerts = $hostVmCerts; break }
+        '^\s*e\s*$' { $displayCerts = @($availableCerts | Where-Object { $_.Subject -match 'Encryption Certificate' }); break }
+        '^\s*s\s*$' { $displayCerts = @($availableCerts | Where-Object { $_.Subject -match 'Signing Certificate' }); break }
+        '^\s*a\s*$' { $displayCerts = $availableCerts; break }
+        default { $displayCerts = $hostVmCerts; break }
+    }
+
+    if ($displayCerts.Count -eq 0) {
+        Write-WarnMsg "No certificates matched the selected filter. Showing all certificates with private keys."
+        $displayCerts = $availableCerts
+    }
+
     Write-Info "Available certificates (with private key):"
-    $indexedCerts = for ($i = 0; $i -lt $availableCerts.Count; $i++) {
+    $indexedCerts = for ($i = 0; $i -lt $displayCerts.Count; $i++) {
         [PSCustomObject]@{
             Number     = $i + 1
-            Thumbprint = $availableCerts[$i].Thumbprint
-            Subject    = $availableCerts[$i].Subject
-            NotAfter   = $availableCerts[$i].NotAfter
+            Thumbprint = $displayCerts[$i].Thumbprint
+            Subject    = $displayCerts[$i].Subject
+            NotAfter   = $displayCerts[$i].NotAfter
         }
     }
-    $indexedCerts | Format-Table -AutoSize
+    Write-Host ""
+    Write-Host ("{0,-6} {1,-40} {2}" -f "Number", "Thumbprint", "Subject")
+    foreach ($item in $indexedCerts) {
+        $line = "{0,-6} {1,-40} {2}" -f $item.Number, $item.Thumbprint, $item.Subject
+        if ($item.Subject -match 'Encryption Certificate') {
+            Write-Host $line -ForegroundColor Green
+        }
+        elseif ($item.Subject -match 'Signing Certificate') {
+            Write-Host $line -ForegroundColor Yellow
+        }
+        else {
+            Write-Host $line -ForegroundColor White
+        }
+    }
+    Write-Host ""
 
-    $lookupValue = Read-Host "Enter certificate number, thumbprint, or part of subject"
+    $recommendedCert = $indexedCerts | Sort-Object NotAfter -Descending | Select-Object -First 1
+    $exportMode = Read-Host "Export mode: [A]ll listed certificates (default) or [S]ingle certificate"
+
+    if ($exportMode -notmatch '^\s*s\s*$') {
+        $destinationFolder = Read-Host "Enter output folder for exported PFX files"
+        if ([string]::IsNullOrWhiteSpace($destinationFolder)) {
+            throw "No destination folder was entered."
+        }
+
+        if (-not (Test-Path -LiteralPath $destinationFolder)) {
+            New-Item -ItemType Directory -Path $destinationFolder -Force | Out-Null
+        }
+
+        $overwriteChoice = Read-Host "Overwrite existing files? (Y/N, default N)"
+        $allowOverwrite = $overwriteChoice -match '^(Y|y)$'
+        $password = Read-Host "Enter password to protect the exported PFX files" -AsSecureString
+
+        $successCount = 0
+        $skipCount = 0
+        $failCount = 0
+
+        foreach ($cert in $displayCerts) {
+            $safeSubject = ($cert.Subject -replace '^CN=', '' -replace '[^A-Za-z0-9._-]', '_').Trim('_')
+            if ([string]::IsNullOrWhiteSpace($safeSubject)) {
+                $safeSubject = "certificate"
+            }
+
+            $shortThumbprint = if ($cert.Thumbprint.Length -ge 12) { $cert.Thumbprint.Substring(0, 12) } else { $cert.Thumbprint }
+            $fileName = "{0}_{1}.pfx" -f $safeSubject, $shortThumbprint
+            $destinationPath = Join-Path $destinationFolder $fileName
+
+            if ((Test-Path -LiteralPath $destinationPath -PathType Leaf) -and -not $allowOverwrite) {
+                Write-WarnMsg "Skipped existing file: $destinationPath"
+                $skipCount++
+                continue
+            }
+
+            try {
+                Write-Info "Exporting: $($cert.Subject)"
+                $exported = Export-PfxCertificate -Cert $cert.PSPath -FilePath $destinationPath -Password $password -ErrorAction Stop
+                if ($null -eq $exported) {
+                    throw "Export-PfxCertificate returned no result."
+                }
+
+                # Validate each exported file to confirm password protection and integrity.
+                $null = Get-PfxData -FilePath $destinationPath -Password $password -ErrorAction Stop
+                Write-Ok "Saved: $destinationPath"
+                $successCount++
+            }
+            catch {
+                Write-ErrMsg ("Failed to export {0}: {1}" -f $cert.Subject, $_.Exception.Message)
+                $failCount++
+            }
+        }
+
+        Write-Host ""
+        Write-Ok ("Export finished. Success: {0}, Skipped: {1}, Failed: {2}" -f $successCount, $skipCount, $failCount)
+        if ($failCount -gt 0) {
+            Write-WarnMsg "Some certificates failed to export. Review errors above."
+        }
+
+        return
+    }
+
+    Write-Info ("Recommended: #{0} (latest expiration: {1})" -f $recommendedCert.Number, $recommendedCert.NotAfter)
+
+    $lookupValue = Read-Host "Enter certificate number, thumbprint, or part of subject (press Enter for recommended #$($recommendedCert.Number))"
     if ([string]::IsNullOrWhiteSpace($lookupValue)) {
-        throw "No selection was entered."
+        $lookupValue = [string]$recommendedCert.Number
     }
 
     $lookupValue = $lookupValue.Trim()
@@ -169,19 +272,19 @@ function Invoke-PfxExport {
 
     if ($lookupValue -match '^\d+$') {
         $selectionNumber = [int]$lookupValue
-        if ($selectionNumber -lt 1 -or $selectionNumber -gt $availableCerts.Count) {
-            throw "Selection number $selectionNumber is out of range. Choose a number between 1 and $($availableCerts.Count)."
+        if ($selectionNumber -lt 1 -or $selectionNumber -gt $displayCerts.Count) {
+            throw "Selection number $selectionNumber is out of range. Choose a number between 1 and $($displayCerts.Count)."
         }
-        $cert = $availableCerts[$selectionNumber - 1]
+        $cert = $displayCerts[$selectionNumber - 1]
     }
     elseif ($lookupValue -match $thumbprintPattern) {
         $normalizedThumbprint = $lookupValue.ToUpperInvariant()
-        $cert = $availableCerts |
+        $cert = $displayCerts |
             Where-Object { $_.Thumbprint -eq $normalizedThumbprint } |
             Select-Object -First 1
     }
     else {
-        $matches = $availableCerts |
+        $matches = $displayCerts |
             Where-Object { $_.Subject -like "*$lookupValue*" }
 
         if (($matches | Measure-Object).Count -gt 1) {
