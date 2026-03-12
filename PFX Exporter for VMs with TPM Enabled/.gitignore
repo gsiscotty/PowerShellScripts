@@ -6,9 +6,8 @@
 
 # Keep PowerShell source files
 !*.ps1
-!*.psm1
-!*.psd1
 
 # Keep repo essentials
 !.gitignore
 !README.md
+!LICENSE*

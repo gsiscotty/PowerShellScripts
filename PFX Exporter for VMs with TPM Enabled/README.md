@@ -22,14 +22,20 @@ PowerShell script to safely **import** or **export** PFX certificates with inter
 ## How to use (local)
 
 1. Open PowerShell.
-2. Run:
+2. Change to the script folder:
+
+```powershell
+Set-Location "C:\path\to\PowerShellScripts\PFX Exporter for VMs with TPM Enabled"
+```
+
+3. Run:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\Import-Pfx-With-Validation.ps1
 ```
 
-3. Choose:
+4. Choose:
    - `1` to import PFX
    - `2` to export certificate to PFX
    - `Q` to exit
@@ -46,13 +52,16 @@ Download command:
 
 ```powershell
 $url = "https://raw.githubusercontent.com/<GITHUB_USER>/<REPO>/<BRANCH>/PowerShellScripts/PFX%20Exporter%20for%20VMs%20with%20TPM%20Enabled/Import-Pfx-With-Validation.ps1"
-$outFile = ".\Import-Pfx-With-Validation.ps1"
+$folder = "$HOME\Downloads\PfxTool"
+$outFile = Join-Path $folder "Import-Pfx-With-Validation.ps1"
+New-Item -ItemType Directory -Path $folder -Force | Out-Null
 Invoke-WebRequest -Uri $url -OutFile $outFile
 ```
 
 Run after download:
 
 ```powershell
+Set-Location "$HOME\Downloads\PfxTool"
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\Import-Pfx-With-Validation.ps1
 ```
