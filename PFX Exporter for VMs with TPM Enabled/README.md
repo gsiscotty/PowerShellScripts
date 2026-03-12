@@ -7,6 +7,7 @@ PowerShell script to safely **import** or **export** PFX certificates with inter
 - Asks what action to perform before doing anything (`Import`, `Export`, or `Quit`)
 - Validates PFX password before import
 - Imports certificate into a selected certificate store
+- Import mode can automatically import both VM cert types (Encryption + Signing)
 - Exports a certificate with private key to a password-protected PFX
 - By default exports host-related VM certificates for the current host (`$env:COMPUTERNAME`)
 - Includes both VM **Encryption** and VM **Signing** certificates in default host export

@@ -42,78 +42,165 @@ function Invoke-PfxImport {
     Write-Host "PFX validation and import tool" -ForegroundColor White
     Write-Host "--------------------------------" -ForegroundColor DarkGray
 
-    $sourcePath = Read-Host "Enter full path to the PFX file"
+    $preferredStore = "Cert:\LocalMachine\Shielded VM Local Certificates"
+    $fallbackStore = "Cert:\LocalMachine\My"
+    $defaultStore = if (Test-Path -LiteralPath $preferredStore) { $preferredStore } else { $fallbackStore }
 
-    if ([string]::IsNullOrWhiteSpace($sourcePath)) {
-        throw "No source path was entered."
+    if ($defaultStore -eq $preferredStore) {
+        Write-Info "Default target store detected for vTPM/shielded VM certificates: $preferredStore"
+    }
+    else {
+        Write-WarnMsg "vTPM/shielded VM store was not found. Falling back to: $fallbackStore"
     }
 
-    if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
-        throw "The file does not exist: $sourcePath"
-    }
-
-    $defaultStore = "Cert:\LocalMachine\My"
     $storeLocation = Read-Host "Enter target certificate store or press Enter for default [$defaultStore]"
     if ([string]::IsNullOrWhiteSpace($storeLocation)) {
         $storeLocation = $defaultStore
     }
 
+    if (-not (Test-Path -LiteralPath $storeLocation)) {
+        throw "The certificate store path does not exist: $storeLocation"
+    }
+
+    $importMode = Read-Host "Import mode: [A]utomatically import both VM cert types (default) or [S]ingle PFX"
     $password = Read-Host "Enter PFX password" -AsSecureString
 
-    Write-Info "Validating PFX and password..."
-    try {
-        $null = Get-PfxData -FilePath $sourcePath -Password $password -ErrorAction Stop
-        Write-Ok "Password validation succeeded."
+    function Import-ValidatedPfxFile {
+        param(
+            [Parameter(Mandatory = $true)]
+            [string]$FilePath,
+
+            [Parameter(Mandatory = $true)]
+            [System.Security.SecureString]$Password,
+
+            [Parameter(Mandatory = $true)]
+            [string]$StoreLocation
+        )
+
+        Write-Info "Validating PFX and password: $FilePath"
+        try {
+            $null = Get-PfxData -FilePath $FilePath -Password $Password -ErrorAction Stop
+            Write-Ok "Password validation succeeded."
+        }
+        catch {
+            $msg = $_.Exception.Message
+
+            if ($msg -match "requires either a different password or membership in an Active Directory principal") {
+                Write-ErrMsg "Validation failed."
+                Write-Host "Cause: The PFX is not importable with this password alone." -ForegroundColor Red
+                Write-Host "It was likely protected for a specific Active Directory principal or exported with different protection settings." -ForegroundColor Red
+                throw "Import validation failed for file: $FilePath"
+            }
+            elseif ($msg -match "network password is not correct|password") {
+                Write-ErrMsg "Validation failed."
+                Write-Host "Cause: The password appears to be incorrect." -ForegroundColor Red
+                throw "Import validation failed for file: $FilePath"
+            }
+            else {
+                Write-ErrMsg "Validation failed."
+                Write-Host "Cause: $msg" -ForegroundColor Red
+                throw "Import validation failed for file: $FilePath"
+            }
+        }
+
+        Write-Info "Importing certificate into $StoreLocation ..."
+        try {
+            $result = Import-PfxCertificate -FilePath $FilePath -CertStoreLocation $StoreLocation -Password $Password -ErrorAction Stop
+
+            if ($null -ne $result) {
+                Write-Ok "Import completed successfully."
+                $result | Select-Object Thumbprint, Subject, FriendlyName, PSParentPath | Format-List
+            }
+            else {
+                Write-WarnMsg "Import command returned no certificate object, but no terminating error occurred."
+            }
+        }
+        catch {
+            $msg = $_.Exception.Message
+
+            Write-ErrMsg "Import failed."
+
+            if ($msg -match "Access is denied|requested operation requires elevation") {
+                Write-Host "Cause: PowerShell likely needs to be started as Administrator for the selected store." -ForegroundColor Red
+            }
+            elseif ($msg -match "requires either a different password or membership in an Active Directory principal") {
+                Write-Host "Cause: The PFX appears to be protected for a specific Active Directory principal." -ForegroundColor Red
+            }
+            else {
+                Write-Host "Cause: $msg" -ForegroundColor Red
+            }
+
+            throw "Import failed for file: $FilePath"
+        }
     }
-    catch {
-        $msg = $_.Exception.Message
 
-        if ($msg -match "requires either a different password or membership in an Active Directory principal") {
-            Write-ErrMsg "Validation failed."
-            Write-Host "Cause: The PFX is not importable with this password alone." -ForegroundColor Red
-            Write-Host "It was likely protected for a specific Active Directory principal or exported with different protection settings." -ForegroundColor Red
-            throw "Import validation failed."
+    if ($importMode -match '^\s*s\s*$') {
+        $sourcePath = Read-Host "Enter full path to the PFX file"
+        if ([string]::IsNullOrWhiteSpace($sourcePath)) {
+            throw "No source path was entered."
         }
-        elseif ($msg -match "network password is not correct|password") {
-            Write-ErrMsg "Validation failed."
-            Write-Host "Cause: The password appears to be incorrect." -ForegroundColor Red
-            throw "Import validation failed."
+        if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+            throw "The file does not exist: $sourcePath"
         }
-        else {
-            Write-ErrMsg "Validation failed."
-            Write-Host "Cause: $msg" -ForegroundColor Red
-            throw "Import validation failed."
+
+        Import-ValidatedPfxFile -FilePath $sourcePath -Password $password -StoreLocation $storeLocation
+        return
+    }
+
+    $sourceFolder = Read-Host "Enter folder path containing exported VM PFX files"
+    if ([string]::IsNullOrWhiteSpace($sourceFolder)) {
+        throw "No source folder path was entered."
+    }
+    if (-not (Test-Path -LiteralPath $sourceFolder -PathType Container)) {
+        throw "The folder does not exist: $sourceFolder"
+    }
+
+    $pfxFiles = @(Get-ChildItem -LiteralPath $sourceFolder -Filter "*.pfx" -File -ErrorAction Stop)
+    if ($pfxFiles.Count -eq 0) {
+        throw "No PFX files were found in folder: $sourceFolder"
+    }
+
+    $encryptionCandidates = @($pfxFiles | Where-Object { $_.Name -match 'Encryption' } | Sort-Object LastWriteTime -Descending)
+    $signingCandidates = @($pfxFiles | Where-Object { $_.Name -match 'Signing' } | Sort-Object LastWriteTime -Descending)
+
+    if ($encryptionCandidates.Count -eq 0 -or $signingCandidates.Count -eq 0) {
+        Write-WarnMsg "Could not detect both Encryption and Signing PFX files by filename."
+        Write-Info "Detected files:"
+        $pfxFiles | Select-Object Name, LastWriteTime | Format-Table -AutoSize
+        throw "Automatic import requires at least one Encryption and one Signing PFX file in the selected folder."
+    }
+
+    $filesToImport = @(
+        $encryptionCandidates[0]
+        $signingCandidates[0]
+    )
+
+    Write-Info "Auto-selected files for import:"
+    $filesToImport | Select-Object Name, FullName, LastWriteTime | Format-Table -AutoSize
+
+    $confirmImport = Read-Host "Import both selected files now? (Y/N, default Y)"
+    if (-not [string]::IsNullOrWhiteSpace($confirmImport) -and $confirmImport -notmatch '^(Y|y)$') {
+        throw "Automatic import was cancelled."
+    }
+
+    $successCount = 0
+    $failCount = 0
+
+    foreach ($file in $filesToImport) {
+        try {
+            Import-ValidatedPfxFile -FilePath $file.FullName -Password $password -StoreLocation $storeLocation
+            $successCount++
+        }
+        catch {
+            Write-ErrMsg $_.Exception.Message
+            $failCount++
         }
     }
 
-    Write-Info "Importing certificate into $storeLocation ..."
-    try {
-        $result = Import-PfxCertificate -FilePath $sourcePath -CertStoreLocation $storeLocation -Password $password -ErrorAction Stop
-
-        if ($null -ne $result) {
-            Write-Ok "Import completed successfully."
-            $result | Select-Object Thumbprint, Subject, FriendlyName, PSParentPath | Format-List
-        }
-        else {
-            Write-WarnMsg "Import command returned no certificate object, but no terminating error occurred."
-        }
-    }
-    catch {
-        $msg = $_.Exception.Message
-
-        Write-ErrMsg "Import failed."
-
-        if ($msg -match "Access is denied|requested operation requires elevation") {
-            Write-Host "Cause: PowerShell likely needs to be started as Administrator for the selected store." -ForegroundColor Red
-        }
-        elseif ($msg -match "requires either a different password or membership in an Active Directory principal") {
-            Write-Host "Cause: The PFX appears to be protected for a specific Active Directory principal." -ForegroundColor Red
-        }
-        else {
-            Write-Host "Cause: $msg" -ForegroundColor Red
-        }
-
-        throw "Import failed."
+    Write-Host ""
+    Write-Ok ("Auto-import finished. Success: {0}, Failed: {1}" -f $successCount, $failCount)
+    if ($failCount -gt 0) {
+        Write-WarnMsg "One or more files failed to import. Review errors above."
     }
 }
 
