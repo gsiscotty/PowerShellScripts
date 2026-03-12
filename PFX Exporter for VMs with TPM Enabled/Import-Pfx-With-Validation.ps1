@@ -62,6 +62,18 @@ function Invoke-PfxImport {
         throw "The certificate store path does not exist: $storeLocation"
     }
 
+    $existingStoreCerts = @(Get-ChildItem -Path $storeLocation -ErrorAction Stop | Where-Object { $_.HasPrivateKey })
+    if ($existingStoreCerts.Count -gt 0) {
+        Write-Info "Existing certificates with private key in target store:"
+        $existingStoreCerts |
+            Select-Object Thumbprint, Subject, NotAfter |
+            Sort-Object Subject, NotAfter |
+            Format-Table -AutoSize
+    }
+    else {
+        Write-WarnMsg "No certificates with private keys currently found in target store."
+    }
+
     $importMode = Read-Host "Import mode: [A]utomatically import both VM cert types (default) or [S]ingle PFX"
     $password = Read-Host "Enter PFX password" -AsSecureString
 
@@ -78,8 +90,9 @@ function Invoke-PfxImport {
         )
 
         Write-Info "Validating PFX and password: $FilePath"
+        $pfxData = $null
         try {
-            $null = Get-PfxData -FilePath $FilePath -Password $Password -ErrorAction Stop
+            $pfxData = Get-PfxData -FilePath $FilePath -Password $Password -ErrorAction Stop
             Write-Ok "Password validation succeeded."
         }
         catch {
@@ -103,6 +116,48 @@ function Invoke-PfxImport {
             }
         }
 
+        $incomingCert = $pfxData.EndEntityCertificates | Select-Object -First 1
+        if ($null -eq $incomingCert) {
+            throw "Validated PFX did not contain an end-entity certificate: $FilePath"
+        }
+
+        Write-Info ("Incoming certificate subject: {0}" -f $incomingCert.Subject)
+        Write-Info ("Incoming certificate thumbprint: {0}" -f $incomingCert.Thumbprint)
+
+        $sameSubjectCerts = @(Get-ChildItem -Path $StoreLocation -ErrorAction Stop |
+            Where-Object { $_.Subject -eq $incomingCert.Subject })
+        $shouldRemoveOlderSameSubject = $false
+
+        if ($sameSubjectCerts.Count -gt 0) {
+            Write-Info "Matching existing certificate(s) with same subject found:"
+            $sameSubjectCerts |
+                Select-Object Thumbprint, Subject, NotAfter |
+                Sort-Object NotAfter -Descending |
+                Format-Table -AutoSize
+
+            $sameThumbprint = $sameSubjectCerts | Where-Object { $_.Thumbprint -eq $incomingCert.Thumbprint } | Select-Object -First 1
+            if ($null -ne $sameThumbprint) {
+                Write-WarnMsg "Identical certificate already exists in target store. Skipping import (not needed)."
+                return "Skipped"
+            }
+
+            $latestExisting = $sameSubjectCerts | Sort-Object NotAfter -Descending | Select-Object -First 1
+            if ($incomingCert.NotAfter -gt $latestExisting.NotAfter) {
+                Write-Info ("New certificate expires later than latest existing one ({0} > {1})." -f $incomingCert.NotAfter, $latestExisting.NotAfter)
+                $replaceChoice = Read-Host "Import new cert and remove older same-subject cert(s)? (Y/N, default Y)"
+                if ([string]::IsNullOrWhiteSpace($replaceChoice) -or $replaceChoice -match '^(Y|y)$') {
+                    $shouldRemoveOlderSameSubject = $true
+                }
+            }
+            else {
+                $importChoice = Read-Host "Existing same-subject cert is same/newer expiry. Import anyway? (Y/N, default N)"
+                if ($importChoice -notmatch '^(Y|y)$') {
+                    Write-WarnMsg "Import skipped because replacement is not needed."
+                    return "Skipped"
+                }
+            }
+        }
+
         Write-Info "Importing certificate into $StoreLocation ..."
         try {
             $result = Import-PfxCertificate -FilePath $FilePath -CertStoreLocation $StoreLocation -Password $Password -ErrorAction Stop
@@ -114,6 +169,20 @@ function Invoke-PfxImport {
             else {
                 Write-WarnMsg "Import command returned no certificate object, but no terminating error occurred."
             }
+
+            if ($shouldRemoveOlderSameSubject -and $sameSubjectCerts.Count -gt 0) {
+                foreach ($oldCert in $sameSubjectCerts) {
+                    try {
+                        Remove-Item -LiteralPath $oldCert.PSPath -ErrorAction Stop
+                        Write-Ok ("Removed older certificate: {0}" -f $oldCert.Thumbprint)
+                    }
+                    catch {
+                        Write-WarnMsg ("Could not remove older certificate {0}: {1}" -f $oldCert.Thumbprint, $_.Exception.Message)
+                    }
+                }
+            }
+
+            return "Imported"
         }
         catch {
             $msg = $_.Exception.Message
@@ -143,7 +212,8 @@ function Invoke-PfxImport {
             throw "The file does not exist: $sourcePath"
         }
 
-        Import-ValidatedPfxFile -FilePath $sourcePath -Password $password -StoreLocation $storeLocation
+        $singleResult = Import-ValidatedPfxFile -FilePath $sourcePath -Password $password -StoreLocation $storeLocation
+        Write-Info ("Single import result: {0}" -f $singleResult)
         return
     }
 
@@ -184,12 +254,18 @@ function Invoke-PfxImport {
     }
 
     $successCount = 0
+    $skipCount = 0
     $failCount = 0
 
     foreach ($file in $filesToImport) {
         try {
-            Import-ValidatedPfxFile -FilePath $file.FullName -Password $password -StoreLocation $storeLocation
-            $successCount++
+            $result = Import-ValidatedPfxFile -FilePath $file.FullName -Password $password -StoreLocation $storeLocation
+            if ($result -eq "Skipped") {
+                $skipCount++
+            }
+            else {
+                $successCount++
+            }
         }
         catch {
             Write-ErrMsg $_.Exception.Message
@@ -198,7 +274,7 @@ function Invoke-PfxImport {
     }
 
     Write-Host ""
-    Write-Ok ("Auto-import finished. Success: {0}, Failed: {1}" -f $successCount, $failCount)
+    Write-Ok ("Auto-import finished. Success: {0}, Skipped: {1}, Failed: {2}" -f $successCount, $skipCount, $failCount)
     if ($failCount -gt 0) {
         Write-WarnMsg "One or more files failed to import. Review errors above."
     }
