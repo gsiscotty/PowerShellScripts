@@ -12,6 +12,7 @@ PowerShell script to safely **import** or **export** PFX certificates with inter
 - By default exports host-related VM certificates for the current host (`$env:COMPUTERNAME`)
 - Includes both VM **Encryption** and VM **Signing** certificates in default host export
 - Validates the exported PFX immediately after export
+- Checks GitHub for a newer script version on launch and prompts to update
 
 ## File
 

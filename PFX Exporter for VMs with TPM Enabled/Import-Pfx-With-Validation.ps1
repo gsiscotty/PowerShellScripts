@@ -1,4 +1,5 @@
 #Requires -Version 5.1
+# ScriptVersion: 1.7.0
 <#
 .SYNOPSIS
 Validates a PFX password first, then imports the certificate if valid.
@@ -16,6 +17,9 @@ Run this script in an elevated PowerShell session if importing to LocalMachine.
 
 [CmdletBinding()]
 param()
+
+$ScriptVersion = "1.7.0"
+$ScriptDownloadUrl = "https://raw.githubusercontent.com/gsiscotty/PowerShellScripts/main/PFX%20Exporter%20for%20VMs%20with%20TPM%20Enabled/Import-Pfx-With-Validation.ps1"
 
 function Write-Info {
     param([string]$Message)
@@ -35,6 +39,80 @@ function Write-WarnMsg {
 function Write-ErrMsg {
     param([string]$Message)
     Write-Host "[ERR]  $Message" -ForegroundColor Red
+}
+
+function Test-IsNewerVersion {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$LocalVersion,
+
+        [Parameter(Mandatory = $true)]
+        [string]$RemoteVersion
+    )
+
+    try {
+        return ([version]$RemoteVersion -gt [version]$LocalVersion)
+    }
+    catch {
+        Write-WarnMsg "Version format comparison failed. Skipping update check."
+        return $false
+    }
+}
+
+function Invoke-ScriptUpdateCheck {
+    if ([string]::IsNullOrWhiteSpace($PSCommandPath)) {
+        Write-WarnMsg "Cannot determine script path for self-update check. Skipping."
+        return $false
+    }
+
+    Write-Info ("Checking for updates (current version: {0})..." -f $ScriptVersion)
+    try {
+        $cacheBuster = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+        $response = Invoke-WebRequest -Uri ("{0}?v={1}" -f $ScriptDownloadUrl, $cacheBuster) -UseBasicParsing -ErrorAction Stop
+        $remoteContent = $response.Content
+
+        if ([string]::IsNullOrWhiteSpace($remoteContent)) {
+            throw "Downloaded update payload is empty."
+        }
+
+        $versionMatch = [regex]::Match($remoteContent, '(?m)^\s*#\s*ScriptVersion:\s*([0-9]+(?:\.[0-9]+){1,3})\s*$')
+        if (-not $versionMatch.Success) {
+            Write-WarnMsg "Could not detect remote script version. Skipping update."
+            return $false
+        }
+
+        $remoteVersion = $versionMatch.Groups[1].Value
+        if (-not (Test-IsNewerVersion -LocalVersion $ScriptVersion -RemoteVersion $remoteVersion)) {
+            Write-Info "No update available."
+            return $false
+        }
+
+        Write-WarnMsg ("A newer version is available: {0} (current: {1})" -f $remoteVersion, $ScriptVersion)
+        $downloadChoice = Read-Host "Download and replace current script now? (Y/N, default N)"
+        if ($downloadChoice -notmatch '^(Y|y)$') {
+            Write-Info "Update skipped by user."
+            return $false
+        }
+
+        $tempPath = Join-Path ([System.IO.Path]::GetTempPath()) ("Import-Pfx-With-Validation.{0}.ps1" -f [guid]::NewGuid().ToString("N"))
+        [System.IO.File]::WriteAllText($tempPath, $remoteContent, [System.Text.Encoding]::UTF8)
+        Copy-Item -LiteralPath $tempPath -Destination $PSCommandPath -Force
+        Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+
+        Write-Ok ("Script updated to version {0}." -f $remoteVersion)
+        $restartChoice = Read-Host "Restart script now to use the new version? (Y/N, default Y)"
+        if ([string]::IsNullOrWhiteSpace($restartChoice) -or $restartChoice -match '^(Y|y)$') {
+            & $PSCommandPath
+            return $true
+        }
+
+        Write-Info "Continuing current session. New version will be used next run."
+        return $false
+    }
+    catch {
+        Write-WarnMsg ("Update check failed: {0}" -f $_.Exception.Message)
+        return $false
+    }
 }
 
 function Get-DefaultVmStoreInfo {
@@ -552,6 +630,10 @@ function Invoke-PfxExport {
     $null = Get-PfxData -FilePath $destinationPath -Password $password -ErrorAction Stop
     Write-Ok "Export completed and validation succeeded."
     Write-Host "Saved file: $destinationPath" -ForegroundColor Green
+}
+
+if (Invoke-ScriptUpdateCheck) {
+    return
 }
 
 while ($true) {
