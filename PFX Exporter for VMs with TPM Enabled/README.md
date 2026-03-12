@@ -42,16 +42,30 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 ## How to download directly in PowerShell
 
-After pushing this file to GitHub, use the raw file URL:
+One-line download command:
+
+```powershell
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/gsiscotty/PowerShellScripts/796bd949cbf4b4a09a67df3ba9ab6d9fd8c3a9ab/PFX%20Exporter%20for%20VMs%20with%20TPM%20Enabled/Import-Pfx-With-Validation.ps1" -OutFile "$HOME\Downloads\Import-Pfx-With-Validation.ps1"
+```
+
+Then run:
+
+```powershell
+Set-Location "$HOME\Downloads"
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\Import-Pfx-With-Validation.ps1
+```
+
+Use this raw file URL:
 
 ```text
-https://raw.githubusercontent.com/<GITHUB_USER>/<REPO>/<BRANCH>/PowerShellScripts/PFX%20Exporter%20for%20VMs%20with%20TPM%20Enabled/Import-Pfx-With-Validation.ps1
+https://raw.githubusercontent.com/gsiscotty/PowerShellScripts/796bd949cbf4b4a09a67df3ba9ab6d9fd8c3a9ab/PFX%20Exporter%20for%20VMs%20with%20TPM%20Enabled/Import-Pfx-With-Validation.ps1
 ```
 
 Download command:
 
 ```powershell
-$url = "https://raw.githubusercontent.com/<GITHUB_USER>/<REPO>/<BRANCH>/PowerShellScripts/PFX%20Exporter%20for%20VMs%20with%20TPM%20Enabled/Import-Pfx-With-Validation.ps1"
+$url = "https://raw.githubusercontent.com/gsiscotty/PowerShellScripts/796bd949cbf4b4a09a67df3ba9ab6d9fd8c3a9ab/PFX%20Exporter%20for%20VMs%20with%20TPM%20Enabled/Import-Pfx-With-Validation.ps1"
 $folder = "$HOME\Downloads\PfxTool"
 $outFile = Join-Path $folder "Import-Pfx-With-Validation.ps1"
 New-Item -ItemType Directory -Path $folder -Force | Out-Null
