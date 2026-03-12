@@ -122,7 +122,17 @@ function Invoke-PfxExport {
     Write-Host "Certificate to PFX export tool" -ForegroundColor White
     Write-Host "------------------------------" -ForegroundColor DarkGray
 
-    $defaultStore = "Cert:\LocalMachine\My"
+    $preferredStore = "Cert:\LocalMachine\Shielded VM Local Certificates"
+    $fallbackStore = "Cert:\LocalMachine\My"
+    $defaultStore = if (Test-Path -LiteralPath $preferredStore) { $preferredStore } else { $fallbackStore }
+
+    if ($defaultStore -eq $preferredStore) {
+        Write-Info "Default source store detected for vTPM/shielded VM certificates: $preferredStore"
+    }
+    else {
+        Write-WarnMsg "vTPM/shielded VM store was not found. Falling back to: $fallbackStore"
+    }
+
     $storeLocation = Read-Host "Enter source certificate store or press Enter for default [$defaultStore]"
     if ([string]::IsNullOrWhiteSpace($storeLocation)) {
         $storeLocation = $defaultStore
