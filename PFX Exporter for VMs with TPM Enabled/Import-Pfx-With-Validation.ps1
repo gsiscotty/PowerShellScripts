@@ -37,20 +37,77 @@ function Write-ErrMsg {
     Write-Host "[ERR]  $Message" -ForegroundColor Red
 }
 
+function Get-DefaultVmStoreInfo {
+    $preferredStore = "Cert:\LocalMachine\Shielded VM Local Certificates"
+    $fallbackStore = "Cert:\LocalMachine\My"
+    $defaultStore = if (Test-Path -LiteralPath $preferredStore) { $preferredStore } else { $fallbackStore }
+
+    [PSCustomObject]@{
+        PreferredStore = $preferredStore
+        FallbackStore  = $fallbackStore
+        DefaultStore   = $defaultStore
+        IsPreferred    = ($defaultStore -eq $preferredStore)
+    }
+}
+
+function Invoke-PfxListDefaultStore {
+    Write-Host ""
+    Write-Host "VM certificate store list" -ForegroundColor White
+    Write-Host "-------------------------" -ForegroundColor DarkGray
+
+    $storeInfo = Get-DefaultVmStoreInfo
+    $storeLocation = $storeInfo.DefaultStore
+
+    if ($storeInfo.IsPreferred) {
+        Write-Info "Listing certificates from default vTPM/shielded VM store: $storeLocation"
+    }
+    else {
+        Write-WarnMsg "vTPM/shielded VM store was not found. Listing fallback store: $storeLocation"
+    }
+
+    if (-not (Test-Path -LiteralPath $storeLocation)) {
+        throw "The certificate store path does not exist: $storeLocation"
+    }
+
+    $availableCerts = @(Get-ChildItem -Path $storeLocation -ErrorAction Stop | Where-Object { $_.HasPrivateKey })
+    if ($availableCerts.Count -eq 0) {
+        Write-WarnMsg "No certificates with private keys were found in $storeLocation."
+        return
+    }
+
+    Write-Info "Certificates with private key:"
+    Write-Host ""
+    Write-Host ("{0,-6} {1,-40} {2,-22} {3}" -f "Number", "Thumbprint", "NotAfter", "Subject")
+
+    for ($i = 0; $i -lt $availableCerts.Count; $i++) {
+        $cert = $availableCerts[$i]
+        $line = "{0,-6} {1,-40} {2,-22} {3}" -f ($i + 1), $cert.Thumbprint, $cert.NotAfter, $cert.Subject
+
+        if ($cert.Subject -match 'Encryption Certificate') {
+            Write-Host $line -ForegroundColor Green
+        }
+        elseif ($cert.Subject -match 'Signing Certificate') {
+            Write-Host $line -ForegroundColor Yellow
+        }
+        else {
+            Write-Host $line -ForegroundColor White
+        }
+    }
+}
+
 function Invoke-PfxImport {
     Write-Host ""
     Write-Host "PFX validation and import tool" -ForegroundColor White
     Write-Host "--------------------------------" -ForegroundColor DarkGray
 
-    $preferredStore = "Cert:\LocalMachine\Shielded VM Local Certificates"
-    $fallbackStore = "Cert:\LocalMachine\My"
-    $defaultStore = if (Test-Path -LiteralPath $preferredStore) { $preferredStore } else { $fallbackStore }
+    $storeInfo = Get-DefaultVmStoreInfo
+    $defaultStore = $storeInfo.DefaultStore
 
-    if ($defaultStore -eq $preferredStore) {
-        Write-Info "Default target store detected for vTPM/shielded VM certificates: $preferredStore"
+    if ($storeInfo.IsPreferred) {
+        Write-Info "Default target store detected for vTPM/shielded VM certificates: $($storeInfo.PreferredStore)"
     }
     else {
-        Write-WarnMsg "vTPM/shielded VM store was not found. Falling back to: $fallbackStore"
+        Write-WarnMsg "vTPM/shielded VM store was not found. Falling back to: $($storeInfo.FallbackStore)"
     }
 
     $storeLocation = Read-Host "Enter target certificate store or press Enter for default [$defaultStore]"
@@ -285,15 +342,14 @@ function Invoke-PfxExport {
     Write-Host "Certificate to PFX export tool" -ForegroundColor White
     Write-Host "------------------------------" -ForegroundColor DarkGray
 
-    $preferredStore = "Cert:\LocalMachine\Shielded VM Local Certificates"
-    $fallbackStore = "Cert:\LocalMachine\My"
-    $defaultStore = if (Test-Path -LiteralPath $preferredStore) { $preferredStore } else { $fallbackStore }
+    $storeInfo = Get-DefaultVmStoreInfo
+    $defaultStore = $storeInfo.DefaultStore
 
-    if ($defaultStore -eq $preferredStore) {
-        Write-Info "Default source store detected for vTPM/shielded VM certificates: $preferredStore"
+    if ($storeInfo.IsPreferred) {
+        Write-Info "Default source store detected for vTPM/shielded VM certificates: $($storeInfo.PreferredStore)"
     }
     else {
-        Write-WarnMsg "vTPM/shielded VM store was not found. Falling back to: $fallbackStore"
+        Write-WarnMsg "vTPM/shielded VM store was not found. Falling back to: $($storeInfo.FallbackStore)"
     }
 
     $storeLocation = Read-Host "Enter source certificate store or press Enter for default [$defaultStore]"
@@ -504,23 +560,25 @@ while ($true) {
     Write-Host "--------" -ForegroundColor DarkGray
     Write-Host "1) Import PFX (validate password first)" -ForegroundColor White
     Write-Host "2) Export certificate to PFX" -ForegroundColor White
+    Write-Host "3) List certificates in default VM store" -ForegroundColor White
     Write-Host "Q) Quit" -ForegroundColor White
     Write-Host ""
 
-    $action = Read-Host "Choose an action (1/2/Q)"
+    $action = Read-Host "Choose an action (1/2/3/Q)"
     $userChoseQuit = $false
 
     try {
         switch -Regex ($action) {
             '^\s*1\s*$' { Invoke-PfxImport; break }
             '^\s*2\s*$' { Invoke-PfxExport; break }
+            '^\s*3\s*$' { Invoke-PfxListDefaultStore; break }
             '^\s*q\s*$' {
                 $userChoseQuit = $true
                 Write-Info "Exiting."
                 break
             }
             default {
-                Write-WarnMsg "Invalid selection. Enter 1, 2, or Q."
+                Write-WarnMsg "Invalid selection. Enter 1, 2, 3, or Q."
             }
         }
     }
