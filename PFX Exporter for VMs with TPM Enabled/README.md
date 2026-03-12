@@ -19,18 +19,19 @@ PowerShell script to safely **import** or **export** PFX certificates with inter
 - Windows PowerShell 5.1 or newer
 - Run PowerShell as Administrator when working with `LocalMachine` stores
 
-## How to use (local)
+## Quick start (download and run)
 
 1. Open PowerShell.
-2. Change to the script folder:
+2. Download the script:
 
 ```powershell
-Set-Location "C:\path\to\PowerShellScripts\PFX Exporter for VMs with TPM Enabled"
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/gsiscotty/PowerShellScripts/796bd949cbf4b4a09a67df3ba9ab6d9fd8c3a9ab/PFX%20Exporter%20for%20VMs%20with%20TPM%20Enabled/Import-Pfx-With-Validation.ps1" -OutFile "$HOME\Downloads\Import-Pfx-With-Validation.ps1"
 ```
 
-3. Run:
+3. Run it:
 
 ```powershell
+Set-Location "$HOME\Downloads"
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\Import-Pfx-With-Validation.ps1
 ```
@@ -40,42 +41,10 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
    - `2` to export certificate to PFX
    - `Q` to exit
 
-## How to download directly in PowerShell
-
-One-line download command:
+## If already cloned locally
 
 ```powershell
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/gsiscotty/PowerShellScripts/796bd949cbf4b4a09a67df3ba9ab6d9fd8c3a9ab/PFX%20Exporter%20for%20VMs%20with%20TPM%20Enabled/Import-Pfx-With-Validation.ps1" -OutFile "$HOME\Downloads\Import-Pfx-With-Validation.ps1"
-```
-
-Then run:
-
-```powershell
-Set-Location "$HOME\Downloads"
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-.\Import-Pfx-With-Validation.ps1
-```
-
-Use this raw file URL:
-
-```text
-https://raw.githubusercontent.com/gsiscotty/PowerShellScripts/796bd949cbf4b4a09a67df3ba9ab6d9fd8c3a9ab/PFX%20Exporter%20for%20VMs%20with%20TPM%20Enabled/Import-Pfx-With-Validation.ps1
-```
-
-Download command:
-
-```powershell
-$url = "https://raw.githubusercontent.com/gsiscotty/PowerShellScripts/796bd949cbf4b4a09a67df3ba9ab6d9fd8c3a9ab/PFX%20Exporter%20for%20VMs%20with%20TPM%20Enabled/Import-Pfx-With-Validation.ps1"
-$folder = "$HOME\Downloads\PfxTool"
-$outFile = Join-Path $folder "Import-Pfx-With-Validation.ps1"
-New-Item -ItemType Directory -Path $folder -Force | Out-Null
-Invoke-WebRequest -Uri $url -OutFile $outFile
-```
-
-Run after download:
-
-```powershell
-Set-Location "$HOME\Downloads\PfxTool"
+Set-Location "C:\path\to\PowerShellScripts\PFX Exporter for VMs with TPM Enabled"
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\Import-Pfx-With-Validation.ps1
 ```
