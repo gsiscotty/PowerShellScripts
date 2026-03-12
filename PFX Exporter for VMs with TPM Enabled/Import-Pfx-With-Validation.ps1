@@ -142,29 +142,52 @@ function Invoke-PfxExport {
         throw "The certificate store path does not exist: $storeLocation"
     }
 
-    $lookupValue = Read-Host "Enter certificate thumbprint (preferred) or part of subject"
+    $availableCerts = @(Get-ChildItem -Path $storeLocation -ErrorAction Stop | Where-Object { $_.HasPrivateKey })
+    if ($availableCerts.Count -eq 0) {
+        throw "No certificates with private keys were found in $storeLocation."
+    }
+
+    Write-Info "Available certificates (with private key):"
+    $indexedCerts = for ($i = 0; $i -lt $availableCerts.Count; $i++) {
+        [PSCustomObject]@{
+            Number     = $i + 1
+            Thumbprint = $availableCerts[$i].Thumbprint
+            Subject    = $availableCerts[$i].Subject
+            NotAfter   = $availableCerts[$i].NotAfter
+        }
+    }
+    $indexedCerts | Format-Table -AutoSize
+
+    $lookupValue = Read-Host "Enter certificate number, thumbprint, or part of subject"
     if ([string]::IsNullOrWhiteSpace($lookupValue)) {
-        throw "No certificate lookup value was entered."
+        throw "No selection was entered."
     }
 
     $lookupValue = $lookupValue.Trim()
     $thumbprintPattern = '^[A-Fa-f0-9]{40}$'
     $cert = $null
 
-    if ($lookupValue -match $thumbprintPattern) {
+    if ($lookupValue -match '^\d+$') {
+        $selectionNumber = [int]$lookupValue
+        if ($selectionNumber -lt 1 -or $selectionNumber -gt $availableCerts.Count) {
+            throw "Selection number $selectionNumber is out of range. Choose a number between 1 and $($availableCerts.Count)."
+        }
+        $cert = $availableCerts[$selectionNumber - 1]
+    }
+    elseif ($lookupValue -match $thumbprintPattern) {
         $normalizedThumbprint = $lookupValue.ToUpperInvariant()
-        $cert = Get-ChildItem -Path $storeLocation -ErrorAction Stop |
+        $cert = $availableCerts |
             Where-Object { $_.Thumbprint -eq $normalizedThumbprint } |
             Select-Object -First 1
     }
     else {
-        $matches = Get-ChildItem -Path $storeLocation -ErrorAction Stop |
+        $matches = $availableCerts |
             Where-Object { $_.Subject -like "*$lookupValue*" }
 
         if (($matches | Measure-Object).Count -gt 1) {
             Write-Info "Multiple certificates matched. Showing candidates:"
             $matches | Select-Object Thumbprint, Subject, NotAfter | Format-Table -AutoSize
-            throw "More than one certificate matched '$lookupValue'. Use a thumbprint to select a single certificate."
+            throw "More than one certificate matched '$lookupValue'. Use a number or thumbprint to select a single certificate."
         }
 
         $cert = $matches | Select-Object -First 1
