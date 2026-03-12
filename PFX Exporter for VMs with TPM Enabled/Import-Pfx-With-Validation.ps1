@@ -72,17 +72,17 @@ function Invoke-PfxImport {
             Write-ErrMsg "Validation failed."
             Write-Host "Cause: The PFX is not importable with this password alone." -ForegroundColor Red
             Write-Host "It was likely protected for a specific Active Directory principal or exported with different protection settings." -ForegroundColor Red
-            exit 1
+            throw "Import validation failed."
         }
         elseif ($msg -match "network password is not correct|password") {
             Write-ErrMsg "Validation failed."
             Write-Host "Cause: The password appears to be incorrect." -ForegroundColor Red
-            exit 1
+            throw "Import validation failed."
         }
         else {
             Write-ErrMsg "Validation failed."
             Write-Host "Cause: $msg" -ForegroundColor Red
-            exit 1
+            throw "Import validation failed."
         }
     }
 
@@ -113,7 +113,7 @@ function Invoke-PfxImport {
             Write-Host "Cause: $msg" -ForegroundColor Red
         }
 
-        exit 1
+        throw "Import failed."
     }
 }
 
@@ -335,7 +335,7 @@ function Invoke-PfxExport {
     Write-Host "Saved file: $destinationPath" -ForegroundColor Green
 }
 
-try {
+while ($true) {
     Write-Host ""
     Write-Host "PFX tool" -ForegroundColor White
     Write-Host "--------" -ForegroundColor DarkGray
@@ -345,20 +345,33 @@ try {
     Write-Host ""
 
     $action = Read-Host "Choose an action (1/2/Q)"
+    $userChoseQuit = $false
 
-    switch -Regex ($action) {
-        '^\s*1\s*$' { Invoke-PfxImport; break }
-        '^\s*2\s*$' { Invoke-PfxExport; break }
-        '^\s*q\s*$' {
-            Write-Info "No action selected. Exiting."
-            break
-        }
-        default {
-            throw "Invalid selection. Enter 1, 2, or Q."
+    try {
+        switch -Regex ($action) {
+            '^\s*1\s*$' { Invoke-PfxImport; break }
+            '^\s*2\s*$' { Invoke-PfxExport; break }
+            '^\s*q\s*$' {
+                $userChoseQuit = $true
+                Write-Info "Exiting."
+                break
+            }
+            default {
+                Write-WarnMsg "Invalid selection. Enter 1, 2, or Q."
+            }
         }
     }
-}
-catch {
-    Write-ErrMsg $_.Exception.Message
-    exit 1
+    catch {
+        Write-ErrMsg $_.Exception.Message
+    }
+
+    if ($userChoseQuit) {
+        break
+    }
+
+    $nextStep = Read-Host "What next? Press Enter for main menu or Q to quit"
+    if ($nextStep -match '^\s*q\s*$') {
+        Write-Info "Exiting."
+        break
+    }
 }
