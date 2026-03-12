@@ -173,6 +173,68 @@ function Invoke-PfxListDefaultStore {
     }
 }
 
+function Invoke-PfxPostImportValidation {
+    Write-Host ""
+    Write-Host "Post-import VM certificate readiness check" -ForegroundColor White
+    Write-Host "-----------------------------------------" -ForegroundColor DarkGray
+
+    $storeInfo = Get-DefaultVmStoreInfo
+    $storeLocation = $storeInfo.DefaultStore
+    $localHost = $env:COMPUTERNAME
+    $escapedHost = [regex]::Escape($localHost)
+
+    if ($storeInfo.IsPreferred) {
+        Write-Info "Checking default vTPM/shielded VM store: $storeLocation"
+    }
+    else {
+        Write-WarnMsg "vTPM/shielded VM store was not found. Checking fallback store: $storeLocation"
+    }
+
+    $storeChoice = Read-Host "Use this store? (Y/N, default Y)"
+    if ($storeChoice -match '^(N|n)$') {
+        $customStore = Read-Host "Enter certificate store path to validate"
+        if (-not [string]::IsNullOrWhiteSpace($customStore)) {
+            $storeLocation = $customStore
+        }
+    }
+
+    if (-not (Test-Path -LiteralPath $storeLocation)) {
+        throw "The certificate store path does not exist: $storeLocation"
+    }
+
+    $allCerts = @(Get-ChildItem -Path $storeLocation -ErrorAction Stop)
+    $hostCerts = @($allCerts | Where-Object { $_.Subject -match $escapedHost })
+    $encryptionCerts = @($hostCerts | Where-Object { $_.Subject -match 'Encryption Certificate' -and $_.HasPrivateKey })
+    $signingCerts = @($hostCerts | Where-Object { $_.Subject -match 'Signing Certificate' -and $_.HasPrivateKey })
+
+    $now = Get-Date
+    $validEncryption = @($encryptionCerts | Where-Object { $_.NotAfter -gt $now })
+    $validSigning = @($signingCerts | Where-Object { $_.NotAfter -gt $now })
+
+    Write-Info ("Host context: {0}" -f $localHost)
+    Write-Info ("Encryption certs with private key: {0} (valid: {1})" -f $encryptionCerts.Count, $validEncryption.Count)
+    Write-Info ("Signing certs with private key: {0} (valid: {1})" -f $signingCerts.Count, $validSigning.Count)
+
+    if ($hostCerts.Count -gt 0) {
+        Write-Info "Host-related certs found in selected store:"
+        $hostCerts |
+            Select-Object Thumbprint, Subject, HasPrivateKey, NotAfter |
+            Sort-Object Subject, NotAfter |
+            Format-Table -AutoSize
+    }
+    else {
+        Write-WarnMsg "No host-related certificates found for this host in selected store."
+    }
+
+    if ($validEncryption.Count -gt 0 -and $validSigning.Count -gt 0) {
+        Write-Ok "Readiness check passed: both Encryption and Signing certificates are present, valid, and include private keys."
+        return $true
+    }
+
+    Write-WarnMsg "Readiness check failed: both valid cert types are required before starting replicated encrypted VMs."
+    return $false
+}
+
 function Invoke-PfxImport {
     Write-Host ""
     Write-Host "PFX validation and import tool" -ForegroundColor White
@@ -349,6 +411,10 @@ function Invoke-PfxImport {
 
         $singleResult = Import-ValidatedPfxFile -FilePath $sourcePath -Password $password -StoreLocation $storeLocation
         Write-Info ("Single import result: {0}" -f $singleResult)
+        $validateNow = Read-Host "Run post-import readiness check now? (Y/N, default Y)"
+        if ([string]::IsNullOrWhiteSpace($validateNow) -or $validateNow -match '^(Y|y)$') {
+            $null = Invoke-PfxPostImportValidation
+        }
         return
     }
 
@@ -412,6 +478,11 @@ function Invoke-PfxImport {
     Write-Ok ("Auto-import finished. Success: {0}, Skipped: {1}, Failed: {2}" -f $successCount, $skipCount, $failCount)
     if ($failCount -gt 0) {
         Write-WarnMsg "One or more files failed to import. Review errors above."
+    }
+
+    $validateNow = Read-Host "Run post-import readiness check now? (Y/N, default Y)"
+    if ([string]::IsNullOrWhiteSpace($validateNow) -or $validateNow -match '^(Y|y)$') {
+        $null = Invoke-PfxPostImportValidation
     }
 }
 
@@ -643,10 +714,11 @@ while ($true) {
     Write-Host "1) Import PFX (validate password first)" -ForegroundColor White
     Write-Host "2) Export certificate to PFX" -ForegroundColor White
     Write-Host "3) List certificates in default VM store" -ForegroundColor White
+    Write-Host "4) Validate target readiness (post-import)" -ForegroundColor White
     Write-Host "Q) Quit" -ForegroundColor White
     Write-Host ""
 
-    $action = Read-Host "Choose an action (1/2/3/Q)"
+    $action = Read-Host "Choose an action (1/2/3/4/Q)"
     $userChoseQuit = $false
 
     try {
@@ -654,13 +726,14 @@ while ($true) {
             '^\s*1\s*$' { Invoke-PfxImport; break }
             '^\s*2\s*$' { Invoke-PfxExport; break }
             '^\s*3\s*$' { Invoke-PfxListDefaultStore; break }
+            '^\s*4\s*$' { $null = Invoke-PfxPostImportValidation; break }
             '^\s*q\s*$' {
                 $userChoseQuit = $true
                 Write-Info "Exiting."
                 break
             }
             default {
-                Write-WarnMsg "Invalid selection. Enter 1, 2, 3, or Q."
+                Write-WarnMsg "Invalid selection. Enter 1, 2, 3, 4, or Q."
             }
         }
     }
